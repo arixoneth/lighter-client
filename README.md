@@ -21,8 +21,9 @@ with raw REST calls or signer plumbing.
 
 Add the crate to your project with Cargo:
 
-```bash
-cargo add lighter_client
+```toml
+[dependencies]
+lighter-rust = { git = "https://github.com/arixoneth/lighter-client" }
 ```
 
 The crate targets Rust 1.70+ and requires Tokio because all high level APIs are
