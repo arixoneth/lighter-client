@@ -1,0 +1,38 @@
+[package]
+name = "lighter_client"
+version = "0.1.0"
+authors = ["Arixon"]
+description = "Typed Rust SDK for interacting with the Lighter exchange APIs"
+# Override this license by providing a License Object in the OpenAPI.
+license = "Unlicense"
+edition = "2021"
+readme = "README.md"
+keywords = ["lighter", "exchange", "sdk", "trading", "defi"]
+categories = ["api-bindings", "cryptography::cryptocurrencies"]
+
+[dependencies]
+serde = { version = "^1.0", features = ["derive"] }
+serde_json = "^1.0"
+serde_repr = "^0.1"
+url = "^2.5"
+reqwest = { version = "^0.12", default-features = false, features = ["json", "multipart"] }
+alloy = "1.0.37"
+tokio = { version = "1.47.1", features = ["full"] }
+libloading = "0.8"
+thiserror = "1.0"
+async-trait = "0.1"
+alloy-signer = "1.0.37"
+alloy-signer-local = "1.0.37"
+anyhow = "1.0"
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"], optional = true }
+tokio-tungstenite = { version = "0.23", features = ["rustls-tls-native-roots"] }
+futures-util = "0.3"
+time = "0.3"
+chrono = "0.4.42"
+
+[features]
+default = ["native-tls"]
+native-tls = ["reqwest/native-tls"]
+rustls-tls = ["reqwest/rustls-tls"]
+timings = ["dep:tracing-subscriber"]
