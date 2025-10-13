@@ -23,7 +23,7 @@ Add the crate to your project with Cargo:
 
 ```toml
 [dependencies]
-lighter-rust = { git = "https://github.com/arixoneth/lighter-client" }
+lighter-client = { git = "https://github.com/arixoneth/lighter-client" }
 ```
 
 The crate targets Rust 1.70+ and requires Tokio because all high level APIs are
