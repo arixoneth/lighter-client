@@ -7,7 +7,10 @@ use std::{
 
 use libloading::{Library, Symbol};
 
-use crate::errors::{Result, SignerClientError};
+use crate::{
+    errors::{Result, SignerClientError},
+    types::CreateOrderTxReq,
+};
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -71,6 +74,12 @@ type SignMintSharesFn = unsafe extern "C" fn(c_longlong, c_longlong, c_longlong)
 type SignBurnSharesFn = unsafe extern "C" fn(c_longlong, c_longlong, c_longlong) -> RawStrOrErr;
 type SignUpdateLeverageFn = unsafe extern "C" fn(c_int, c_int, c_int, c_longlong) -> RawStrOrErr;
 type CreateAuthTokenFn = unsafe extern "C" fn(c_longlong) -> RawStrOrErr;
+type SignCreateGroupedOrdersFn = unsafe extern "C" fn(
+    u8,                      // grouping_type
+    *const CreateOrderTxReq, // orders pointer
+    c_int,                   // number of orders
+    c_longlong,              // nonce
+) -> RawStrOrErr;
 
 pub struct SignerLibrary {
     #[allow(dead_code)]
@@ -93,6 +102,7 @@ pub struct SignerLibrary {
     sign_burn_shares: SignBurnSharesFn,
     sign_update_leverage: SignUpdateLeverageFn,
     create_auth_token: CreateAuthTokenFn,
+    sign_create_grouped_orders: SignCreateGroupedOrdersFn,
 }
 
 impl SignerLibrary {
@@ -177,6 +187,8 @@ impl SignerLibrary {
         let sign_burn_shares = load_fn!(b"SignBurnShares\0", SignBurnSharesFn);
         let sign_update_leverage = load_fn!(b"SignUpdateLeverage\0", SignUpdateLeverageFn);
         let create_auth_token = load_fn!(b"CreateAuthToken\0", CreateAuthTokenFn);
+        let sign_create_grouped_orders =
+            load_fn!(b"SignCreateGroupedOrders\0", SignCreateGroupedOrdersFn);
 
         Ok(SignerLibrary {
             lib,
@@ -198,6 +210,7 @@ impl SignerLibrary {
             sign_burn_shares,
             sign_update_leverage,
             create_auth_token,
+            sign_create_grouped_orders,
         })
     }
 
@@ -447,6 +460,23 @@ impl SignerLibrary {
 
     pub fn create_auth_token(&self, deadline: i64) -> Result<(Option<String>, Option<String>)> {
         let raw = unsafe { (self.create_auth_token)(deadline) };
+        str_or_err(raw)
+    }
+
+    pub fn sign_create_grouped_orders(
+        &self,
+        grouping_type: u8,
+        orders: &[CreateOrderTxReq],
+        nonce: i64,
+    ) -> Result<(Option<String>, Option<String>)> {
+        let raw = unsafe {
+            (self.sign_create_grouped_orders)(
+                grouping_type,
+                orders.as_ptr(),
+                orders.len() as c_int,
+                nonce,
+            )
+        };
         str_or_err(raw)
     }
 }

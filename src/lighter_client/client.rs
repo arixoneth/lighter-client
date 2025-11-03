@@ -25,7 +25,7 @@ use crate::{
     nonce_manager::NonceManagerType,
     signer_client::{SignedPayload, SignerClient},
     transactions,
-    types::{AccountId, ApiKeyIndex, BaseQty, Expiry, MarketId, Nonce, Price, UsdcAmount},
+    types::{AccountId, ApiKeyIndex, BaseQty, CreateOrderTxReq, Expiry, MarketId, Nonce, Price, UsdcAmount},
     ws_client::{WsBuilder, WsConfig},
 };
 
@@ -193,6 +193,11 @@ impl LighterClient {
 
     pub fn order_batch(&self) -> OrderBatchBuilder<'_> {
         OrderBatchBuilder::new()
+    }
+
+    /// Create a grouped orders builder for OCO/OTO/OTOCO relationships.
+    pub fn grouped_orders(&self) -> GroupedOrdersBuilder<'_, GroupedOrdersStateInit> {
+        GroupedOrdersBuilder::new(self)
     }
 
     /// Create a cancellation builder for a specific order.
@@ -2244,5 +2249,321 @@ fn default_order_expiry(time_in_force: OrderTimeInForce, signer: &SignerClient) 
     match time_in_force {
         OrderTimeInForce::ImmediateOrCancel => signer.default_ioc_expiry(),
         OrderTimeInForce::GoodTillTime | OrderTimeInForce::PostOnly => DEFAULT_ORDER_EXPIRY,
+    }
+}
+
+/// Grouping type for grouped orders.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GroupingType {
+    /// One-Triggers-Other: When first order fills, second activates.
+    OTO,
+    /// One-Cancels-Other: When one order fills, the other is cancelled.
+    OCO,
+    /// One-Triggers-a-One-Cancels-Other: Entry order triggers OCO pair.
+    OTOCO,
+}
+
+/// Grouped orders submission wrapper.
+#[derive(Debug, Clone)]
+pub struct GroupedOrdersSubmission {
+    payload: transactions::CreateGroupedOrders,
+    response: models::RespSendTx,
+}
+
+impl GroupedOrdersSubmission {
+    fn new(payload: transactions::CreateGroupedOrders, response: models::RespSendTx) -> Self {
+        Self { payload, response }
+    }
+
+    pub fn payload(&self) -> &transactions::CreateGroupedOrders {
+        &self.payload
+    }
+
+    pub fn response(&self) -> &models::RespSendTx {
+        &self.response
+    }
+
+    pub fn into_payload(self) -> transactions::CreateGroupedOrders {
+        self.payload
+    }
+
+    pub fn into_parts(self) -> (transactions::CreateGroupedOrders, models::RespSendTx) {
+        (self.payload, self.response)
+    }
+}
+
+/// Grouped orders builder typestates.
+pub struct GroupedOrdersStateInit;
+pub struct GroupedOrdersStateGrouping;
+pub struct GroupedOrdersStateReady;
+
+/// Grouped orders builder for creating OCO/OTO/OTOCO order relationships.
+pub struct GroupedOrdersBuilder<'a, S> {
+    client: &'a LighterClient,
+    grouping_type: Option<GroupingType>,
+    orders: Vec<OrderBuilderState<'a>>,
+    nonce: Option<Nonce>,
+    api_key_override: Option<ApiKeyIndex>,
+    _marker: PhantomData<S>,
+}
+
+impl<'a> GroupedOrdersBuilder<'a, GroupedOrdersStateInit> {
+    fn new(client: &'a LighterClient) -> Self {
+        Self {
+            client,
+            grouping_type: None,
+            orders: Vec::new(),
+            nonce: None,
+            api_key_override: None,
+            _marker: PhantomData,
+        }
+    }
+
+    /// Create a One-Cancels-Other relationship.
+    pub fn oco(mut self) -> GroupedOrdersBuilder<'a, GroupedOrdersStateGrouping> {
+        self.grouping_type = Some(GroupingType::OCO);
+        GroupedOrdersBuilder {
+            client: self.client,
+            grouping_type: self.grouping_type,
+            orders: self.orders,
+            nonce: self.nonce,
+            api_key_override: self.api_key_override,
+            _marker: PhantomData,
+        }
+    }
+
+    /// Create a One-Triggers-Other relationship.
+    pub fn oto(mut self) -> GroupedOrdersBuilder<'a, GroupedOrdersStateGrouping> {
+        self.grouping_type = Some(GroupingType::OTO);
+        GroupedOrdersBuilder {
+            client: self.client,
+            grouping_type: self.grouping_type,
+            orders: self.orders,
+            nonce: self.nonce,
+            api_key_override: self.api_key_override,
+            _marker: PhantomData,
+        }
+    }
+
+    /// Create a One-Triggers-a-One-Cancels-Other relationship.
+    pub fn otoco(mut self) -> GroupedOrdersBuilder<'a, GroupedOrdersStateGrouping> {
+        self.grouping_type = Some(GroupingType::OTOCO);
+        GroupedOrdersBuilder {
+            client: self.client,
+            grouping_type: self.grouping_type,
+            orders: self.orders,
+            nonce: self.nonce,
+            api_key_override: self.api_key_override,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<'a> GroupedOrdersBuilder<'a, GroupedOrdersStateGrouping> {
+    /// Add an order to the group.
+    pub fn add_order(
+        mut self,
+        order: OrderBuilder<'a, OrderStateReady>,
+    ) -> GroupedOrdersBuilder<'a, GroupedOrdersStateReady> {
+        self.orders.push(order.into_state());
+        GroupedOrdersBuilder {
+            client: self.client,
+            grouping_type: self.grouping_type,
+            orders: self.orders,
+            nonce: self.nonce,
+            api_key_override: self.api_key_override,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<'a> GroupedOrdersBuilder<'a, GroupedOrdersStateReady> {
+    /// Add another order to the group.
+    pub fn add_order(mut self, order: OrderBuilder<'a, OrderStateReady>) -> Self {
+        self.orders.push(order.into_state());
+        self
+    }
+
+    /// Add another order to the group (mutable variant).
+    pub fn add(&mut self, order: OrderBuilder<'a, OrderStateReady>) -> &mut Self {
+        self.orders.push(order.into_state());
+        self
+    }
+
+    /// Override the nonce for this grouped order transaction.
+    pub fn with_nonce(mut self, nonce: Nonce) -> Self {
+        self.nonce = Some(nonce);
+        self
+    }
+
+    /// Override the API key index for this grouped order transaction.
+    pub fn with_api_key(mut self, index: ApiKeyIndex) -> Self {
+        self.api_key_override = Some(index);
+        self
+    }
+
+    /// Submit the grouped orders to the exchange.
+    pub async fn submit(self) -> Result<GroupedOrdersSubmission> {
+        self.validate()?;
+        let signer = self.client.signer_ref()?;
+
+        let grouping_type_code = match self.grouping_type.expect("validated grouping type") {
+            GroupingType::OTO => signer.grouping_type_oto(),
+            GroupingType::OCO => signer.grouping_type_oco(),
+            GroupingType::OTOCO => signer.grouping_type_otoco(),
+        };
+
+        let order_requests = self.build_order_requests(signer)?;
+
+        let (payload, response) = signer
+            .create_grouped_orders(
+                grouping_type_code,
+                &order_requests,
+                self.nonce.map(Into::into),
+                self.api_key_override.map(Into::into),
+            )
+            .await?;
+
+        Ok(GroupedOrdersSubmission::new(payload, response))
+    }
+
+    /// Sign the grouped orders without submitting.
+    pub async fn sign(self) -> Result<SignedPayload<transactions::CreateGroupedOrders>> {
+        self.validate()?;
+        let signer = self.client.signer_ref()?;
+
+        let grouping_type_code = match self.grouping_type.expect("validated grouping type") {
+            GroupingType::OTO => signer.grouping_type_oto(),
+            GroupingType::OCO => signer.grouping_type_oco(),
+            GroupingType::OTOCO => signer.grouping_type_otoco(),
+        };
+
+        let order_requests = self.build_order_requests(signer)?;
+
+        signer
+            .sign_create_grouped_orders(
+                grouping_type_code,
+                &order_requests,
+                self.nonce.map(Into::into),
+                self.api_key_override.map(Into::into),
+            )
+            .await
+            .map_err(Into::into)
+    }
+
+    fn validate(&self) -> Result<()> {
+        if self.orders.is_empty() {
+            return Err(Error::InvalidConfig {
+                field: "orders",
+                why: "at least one order must be added",
+            });
+        }
+
+        // Validate grouping-specific requirements
+        match self.grouping_type {
+            Some(GroupingType::OCO) => {
+                if self.orders.len() != 2 {
+                    return Err(Error::InvalidConfig {
+                        field: "orders",
+                        why: "OCO requires exactly 2 orders",
+                    });
+                }
+            }
+            Some(GroupingType::OTO) => {
+                if self.orders.len() != 2 {
+                    return Err(Error::InvalidConfig {
+                        field: "orders",
+                        why: "OTO requires exactly 2 orders",
+                    });
+                }
+            }
+            Some(GroupingType::OTOCO) => {
+                if self.orders.len() != 3 {
+                    return Err(Error::InvalidConfig {
+                        field: "orders",
+                        why: "OTOCO requires exactly 3 orders (1 entry + 2 OCO legs)",
+                    });
+                }
+            }
+            None => {
+                return Err(Error::InvalidConfig {
+                    field: "grouping_type",
+                    why: "grouping type must be specified",
+                });
+            }
+        }
+
+        Ok(())
+    }
+
+    fn build_order_requests(&self, signer: &SignerClient) -> Result<Vec<CreateOrderTxReq>> {
+        let mut requests = Vec::with_capacity(self.orders.len());
+
+        for order_state in &self.orders {
+            requests.push(self.convert_order_to_request(order_state, signer)?);
+        }
+
+        Ok(requests)
+    }
+
+    fn convert_order_to_request(
+        &self,
+        state: &OrderBuilderState<'a>,
+        signer: &SignerClient,
+    ) -> Result<CreateOrderTxReq> {
+        state.validate()?;
+
+        let kind = state.kind.as_ref().ok_or(Error::InvalidConfig {
+            field: "kind",
+            why: "order type must be specified",
+        })?;
+
+        let (price, trigger_price) = match kind {
+            OrderKind::Limit { price } => {
+                let price_ticks = state.apply_price_offset(*price, "price")?;
+                (price_ticks as u32, DEFAULT_TRIGGER_PRICE as u32)
+            }
+            OrderKind::Market { .. } => {
+                (DEFAULT_MARKET_PRICE as u32, DEFAULT_TRIGGER_PRICE as u32)
+            }
+            OrderKind::StopLossMarket { trigger } | OrderKind::TakeProfitMarket { trigger } => {
+                let trigger_ticks = OrderBuilderState::<'_>::trigger_ticks(*trigger)? as u32;
+                (DEFAULT_MARKET_PRICE as u32, trigger_ticks)
+            }
+            OrderKind::StopLossLimit { trigger, limit_price }
+            | OrderKind::TakeProfitLimit { trigger, limit_price } => {
+                let price_ticks = state.apply_price_offset(*limit_price, "limit_price")? as u32;
+                let trigger_ticks = OrderBuilderState::<'_>::trigger_ticks(*trigger)? as u32;
+                (price_ticks, trigger_ticks)
+            }
+        };
+
+        // For reduce-only stop-loss/take-profit orders in grouped orders,
+        // base_amount must be 0 (the signer library will use the position size)
+        let base_amount = if state.reduce_only && matches!(kind,
+            OrderKind::StopLossMarket { .. } |
+            OrderKind::StopLossLimit { .. } |
+            OrderKind::TakeProfitMarket { .. } |
+            OrderKind::TakeProfitLimit { .. }
+        ) {
+            0  // Signer library requires 0 for reduce-only conditional orders
+        } else {
+            state.qty()
+        };
+
+        let expiry = state.expiry(signer)?;
+
+        Ok(CreateOrderTxReq {
+            market_index: state.market.into_inner() as u8,
+            client_order_index: state.resolved_client_order_id(),
+            base_amount,
+            price,
+            is_ask: if state.side().is_ask() { 1 } else { 0 },
+            order_type: state.order_type(signer) as u8,
+            time_in_force: state.time_in_force_code(signer) as u8,
+            reduce_only: if state.reduce_only { 1 } else { 0 },
+            trigger_price,
+            order_expiry: expiry,
+        })
     }
 }
