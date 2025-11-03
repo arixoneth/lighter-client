@@ -1101,7 +1101,7 @@ fn generate_client_order_id() -> i64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_micros();
-    (micros % i64::MAX as u128) as i64
+    (micros % i32::MAX as u128) as i64
 }
 
 struct OrderBuilderState<'a> {
