@@ -38,7 +38,7 @@ pub struct Order {
     #[serde(rename = "base_size")]
     pub base_size: i64,
     #[serde(rename = "base_price")]
-    pub base_price: i32,
+    pub base_price: i64,
     #[serde(rename = "filled_base_amount")]
     pub filled_base_amount: String,
     #[serde(rename = "filled_quote_amount")]
@@ -92,7 +92,7 @@ impl Order {
         remaining_base_amount: String,
         is_ask: bool,
         base_size: i64,
-        base_price: i32,
+        base_price: i64,
         filled_base_amount: String,
         filled_quote_amount: String,
         side: String,
