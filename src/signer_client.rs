@@ -522,6 +522,27 @@ impl SignerClient {
         self.sign_cancel_order_with_context(market_index, order_index, &context)
     }
 
+    pub async fn sign_modify_order(
+        &self,
+        market_index: i32,
+        order_index: i64,
+        base_amount: i64,
+        price: i64,
+        trigger_price: i64,
+        nonce: Option<i64>,
+        api_key_index: Option<i32>,
+    ) -> Result<SignedPayload<transactions::ModifyOrder>> {
+        let context = self.prepare_context(api_key_index, nonce, false).await?;
+        self.sign_modify_order_with_context(
+            market_index,
+            order_index,
+            base_amount,
+            price,
+            trigger_price,
+            &context,
+        )
+    }
+
     pub async fn sign_withdraw(
         &self,
         usdc_amount: f64,
@@ -950,21 +971,21 @@ impl SignerClient {
         trigger_price: i64,
         nonce: Option<i64>,
         api_key_index: Option<i32>,
-    ) -> Result<(String, models::RespSendTx)> {
+    ) -> Result<(transactions::ModifyOrder, models::RespSendTx)> {
         let context = self.prepare_context(api_key_index, nonce, true).await?;
-        let (tx_info, error) = self.signer.sign_modify_order(
+        let signed = self.sign_modify_order_with_context(
             market_index,
             order_index,
             base_amount,
             price,
             trigger_price,
-            context.nonce,
+            &context,
         )?;
-        let tx_info = parse_sign_output(tx_info, error, "sign_modify_order")?;
+        let payload = signed.payload().to_owned();
         let response = self
-            .submit_signed_tx(&context, TX_TYPE_MODIFY_ORDER, &tx_info, None)
+            .submit_signed_tx(&context, signed.tx_type(), &payload, None)
             .await?;
-        Ok((tx_info, response))
+        Ok((signed.into_parsed(), response))
     }
 
     pub async fn withdraw(
@@ -1174,6 +1195,28 @@ impl SignerClient {
         let tx_info = parse_sign_output(tx_info, error, "sign_cancel_order")?;
         let parsed = transactions::CancelOrder::from_json_str(&tx_info)?;
         Ok(SignedPayload::new(TX_TYPE_CANCEL_ORDER, tx_info, parsed))
+    }
+
+    fn sign_modify_order_with_context(
+        &self,
+        market_index: i32,
+        order_index: i64,
+        base_amount: i64,
+        price: i64,
+        trigger_price: i64,
+        context: &SigningContext,
+    ) -> Result<SignedPayload<transactions::ModifyOrder>> {
+        let (tx_info, error) = self.signer.sign_modify_order(
+            market_index,
+            order_index,
+            base_amount,
+            price,
+            trigger_price,
+            context.nonce,
+        )?;
+        let tx_info = parse_sign_output(tx_info, error, "sign_modify_order")?;
+        let parsed = transactions::ModifyOrder::from_json_str(&tx_info)?;
+        Ok(SignedPayload::new(TX_TYPE_MODIFY_ORDER, tx_info, parsed))
     }
 
     fn sign_withdraw_with_context(

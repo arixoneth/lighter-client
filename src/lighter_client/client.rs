@@ -205,6 +205,11 @@ impl LighterClient {
         CancelOrderBuilder::new(self, market, order_index)
     }
 
+    /// Create a modify order builder for a specific order.
+    pub fn modify(&self, market: MarketId, order_index: i64) -> ModifyOrderBuilder<'_> {
+        ModifyOrderBuilder::new(self, market, order_index)
+    }
+
     /// Create a builder that cancels all resting orders for the configured account.
     pub fn cancel_all(&self) -> CancelAllBuilder<'_> {
         CancelAllBuilder::new(self)
@@ -2127,6 +2132,102 @@ impl<'a> CancelOrderBuilder<'a> {
             )
             .await?;
         Ok(Submission::new(payload, response))
+    }
+}
+
+/// Modify order builder.
+pub struct ModifyOrderBuilder<'a> {
+    client: &'a LighterClient,
+    market: MarketId,
+    order_index: i64,
+    base_amount: Option<BaseQty>,
+    price: Option<Price>,
+    trigger_price: Option<Price>,
+    nonce: Option<Nonce>,
+    api_key_override: Option<ApiKeyIndex>,
+}
+
+impl<'a> ModifyOrderBuilder<'a> {
+    fn new(client: &'a LighterClient, market: MarketId, order_index: i64) -> Self {
+        Self {
+            client,
+            market,
+            order_index,
+            base_amount: None,
+            price: None,
+            trigger_price: None,
+            nonce: None,
+            api_key_override: None,
+        }
+    }
+
+    /// Set the new quantity for the order.
+    pub fn qty(mut self, qty: BaseQty) -> Self {
+        self.base_amount = Some(qty);
+        self
+    }
+
+    /// Set the new limit price for the order.
+    pub fn price(mut self, price: Price) -> Self {
+        self.price = Some(price);
+        self
+    }
+
+    /// Set the new trigger price for SL/TP orders.
+    pub fn trigger_price(mut self, trigger: Price) -> Self {
+        self.trigger_price = Some(trigger);
+        self
+    }
+
+    pub fn nonce(mut self, nonce: Nonce) -> Self {
+        self.nonce = Some(nonce);
+        self
+    }
+
+    pub fn api_key(mut self, index: ApiKeyIndex) -> Self {
+        self.api_key_override = Some(index);
+        self
+    }
+
+    /// Sign and submit the modify order transaction.
+    pub async fn submit(self) -> Result<Submission<transactions::ModifyOrder>> {
+        let signer = self.client.signer_ref()?;
+        let base_amount = self.base_amount.map(|q| q.into_inner()).unwrap_or(0);
+        let price = self.price.map(|p| p.into_ticks() as i64).unwrap_or(DEFAULT_MARKET_PRICE as i64);
+        let trigger = self.trigger_price.map(|p| p.into_ticks() as i64).unwrap_or(0);
+
+        let (payload, response) = signer
+            .modify_order(
+                self.market.into(),
+                self.order_index,
+                base_amount,
+                price,
+                trigger,
+                self.nonce.map(Into::into),
+                self.api_key_override.map(Into::into),
+            )
+            .await?;
+        Ok(Submission::new(payload, response))
+    }
+
+    /// Sign the modify order transaction without submitting.
+    pub async fn sign(self) -> Result<SignedPayload<transactions::ModifyOrder>> {
+        let signer = self.client.signer_ref()?;
+        let base_amount = self.base_amount.map(|q| q.into_inner()).unwrap_or(0);
+        let price = self.price.map(|p| p.into_ticks() as i64).unwrap_or(DEFAULT_MARKET_PRICE as i64);
+        let trigger = self.trigger_price.map(|p| p.into_ticks() as i64).unwrap_or(0);
+
+        Ok(signer
+            .sign_modify_order(
+                self.market.into(),
+                self.order_index,
+                base_amount,
+                price,
+                trigger,
+                self.nonce.map(Into::into),
+                self.api_key_override.map(Into::into),
+            )
+            .await?)
     }
 }
 
