@@ -255,3 +255,20 @@ impl From<UsdcAmount> for f64 {
         value.into_inner()
     }
 }
+
+/// FFI-compatible struct for creating orders in grouped order submissions.
+/// This struct must match the C layout expected by the signer library.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct CreateOrderTxReq {
+    pub market_index: u8,
+    pub client_order_index: i64,
+    pub base_amount: i64,
+    pub price: u32,
+    pub is_ask: u8,
+    pub order_type: u8,
+    pub time_in_force: u8,
+    pub reduce_only: u8,
+    pub trigger_price: u32,
+    pub order_expiry: i64,
+}

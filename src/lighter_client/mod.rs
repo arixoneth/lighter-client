@@ -9,9 +9,10 @@ mod rest;
 pub use client::{
     AccountHandle, BlocksHandle, BracketBuilder, BracketSigned, BracketSubmission, BridgeHandle,
     CancelAllBuilder, CancelOrderBuilder, CandlesHandle, FundingHandle, InfoHandle, LighterClient,
-    LighterClientBuilder, LighterClientOptions, NotificationsHandle, OrderBatchBuilder,
-    OrderBuilder, OrderSide, OrderStateInit, OrderStateQty, OrderStateReady, OrderStateSide,
-    OrderTimeInForce, OrdersHandle, Submission, TransactionsHandle, WithdrawBuilder,
+    LighterClientBuilder, LighterClientOptions, ModifyOrderBuilder, NotificationsHandle,
+    OrderBatchBuilder, OrderBuilder, OrderSide, OrderStateInit, OrderStateQty, OrderStateReady,
+    OrderStateSide, OrderTimeInForce, OrdersHandle, Submission, TransactionsHandle,
+    WithdrawBuilder,
 };
 pub use errors::{Error, Result};
 pub use params::{

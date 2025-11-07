@@ -19,6 +19,7 @@ use crate::{
     nonce_manager::{self, NonceManager, NonceManagerType},
     signer::SignerLibrary,
     timings, transactions,
+    types::CreateOrderTxReq,
 };
 
 const CODE_OK: i32 = 200;
@@ -36,6 +37,7 @@ const TX_TYPE_MODIFY_ORDER: i32 = 17;
 const TX_TYPE_MINT_SHARES: i32 = 18;
 const TX_TYPE_BURN_SHARES: i32 = 19;
 const TX_TYPE_UPDATE_LEVERAGE: i32 = 20;
+const TX_TYPE_CREATE_GROUP_ORDER: i32 = 28;
 
 const ORDER_TYPE_LIMIT: i32 = 0;
 const ORDER_TYPE_MARKET: i32 = 1;
@@ -47,6 +49,10 @@ const ORDER_TYPE_TAKE_PROFIT_LIMIT: i32 = 5;
 const ORDER_TIME_IN_FORCE_IMMEDIATE_OR_CANCEL: i32 = 0;
 const ORDER_TIME_IN_FORCE_GOOD_TILL_TIME: i32 = 1;
 const ORDER_TIME_IN_FORCE_POST_ONLY: i32 = 2;
+
+const GROUPING_TYPE_ONE_TRIGGERS_THE_OTHER: i32 = 1;
+const GROUPING_TYPE_ONE_CANCELS_THE_OTHER: i32 = 2;
+const GROUPING_TYPE_ONE_TRIGGERS_A_ONE_CANCELS_THE_OTHER: i32 = 3;
 
 const DEFAULT_28_DAY_ORDER_EXPIRY: i64 = -1;
 const DEFAULT_IOC_EXPIRY: i64 = 0;
@@ -254,6 +260,18 @@ impl SignerClient {
 
     pub fn order_time_in_force_immediate_or_cancel(&self) -> i32 {
         ORDER_TIME_IN_FORCE_IMMEDIATE_OR_CANCEL
+    }
+
+    pub fn grouping_type_oco(&self) -> i32 {
+        GROUPING_TYPE_ONE_CANCELS_THE_OTHER
+    }
+
+    pub fn grouping_type_oto(&self) -> i32 {
+        GROUPING_TYPE_ONE_TRIGGERS_THE_OTHER
+    }
+
+    pub fn grouping_type_otoco(&self) -> i32 {
+        GROUPING_TYPE_ONE_TRIGGERS_A_ONE_CANCELS_THE_OTHER
     }
 
     pub async fn check_client(&self) -> Result<Option<String>> {
@@ -504,6 +522,27 @@ impl SignerClient {
         self.sign_cancel_order_with_context(market_index, order_index, &context)
     }
 
+    pub async fn sign_modify_order(
+        &self,
+        market_index: i32,
+        order_index: i64,
+        base_amount: i64,
+        price: i64,
+        trigger_price: i64,
+        nonce: Option<i64>,
+        api_key_index: Option<i32>,
+    ) -> Result<SignedPayload<transactions::ModifyOrder>> {
+        let context = self.prepare_context(api_key_index, nonce, false).await?;
+        self.sign_modify_order_with_context(
+            market_index,
+            order_index,
+            base_amount,
+            price,
+            trigger_price,
+            &context,
+        )
+    }
+
     pub async fn sign_withdraw(
         &self,
         usdc_amount: f64,
@@ -512,6 +551,39 @@ impl SignerClient {
     ) -> Result<SignedPayload<transactions::Withdraw>> {
         let context = self.prepare_context(api_key_index, nonce, false).await?;
         self.sign_withdraw_with_context(usdc_amount, &context)
+    }
+
+    pub async fn sign_create_grouped_orders(
+        &self,
+        grouping_type: i32,
+        orders: &[CreateOrderTxReq],
+        nonce: Option<i64>,
+        api_key_index: Option<i32>,
+    ) -> Result<SignedPayload<transactions::CreateGroupedOrders>> {
+        let context = self.prepare_context(api_key_index, nonce, false).await?;
+        self.sign_create_grouped_orders_with_context(grouping_type, orders, &context)
+    }
+
+    pub async fn create_grouped_orders(
+        &self,
+        grouping_type: i32,
+        orders: &[CreateOrderTxReq],
+        nonce: Option<i64>,
+        api_key_index: Option<i32>,
+    ) -> Result<(transactions::CreateGroupedOrders, models::RespSendTx)> {
+        let context = self.prepare_context(api_key_index, nonce, true).await?;
+
+        let signed = timings::time_block("sign_create_grouped_orders", || {
+            self.sign_create_grouped_orders_with_context(grouping_type, orders, &context)
+        })?;
+
+        let payload = signed.payload().to_owned();
+        let response = timings::time_async_block(
+            "submit_signed_tx",
+            self.submit_signed_tx(&context, signed.tx_type(), &payload, None),
+        )
+        .await?;
+        Ok((signed.into_parsed(), response))
     }
 
     pub async fn send_signed_transaction(
@@ -899,21 +971,21 @@ impl SignerClient {
         trigger_price: i64,
         nonce: Option<i64>,
         api_key_index: Option<i32>,
-    ) -> Result<(String, models::RespSendTx)> {
+    ) -> Result<(transactions::ModifyOrder, models::RespSendTx)> {
         let context = self.prepare_context(api_key_index, nonce, true).await?;
-        let (tx_info, error) = self.signer.sign_modify_order(
+        let signed = self.sign_modify_order_with_context(
             market_index,
             order_index,
             base_amount,
             price,
             trigger_price,
-            context.nonce,
+            &context,
         )?;
-        let tx_info = parse_sign_output(tx_info, error, "sign_modify_order")?;
+        let payload = signed.payload().to_owned();
         let response = self
-            .submit_signed_tx(&context, TX_TYPE_MODIFY_ORDER, &tx_info, None)
+            .submit_signed_tx(&context, signed.tx_type(), &payload, None)
             .await?;
-        Ok((tx_info, response))
+        Ok((signed.into_parsed(), response))
     }
 
     pub async fn withdraw(
@@ -1125,6 +1197,28 @@ impl SignerClient {
         Ok(SignedPayload::new(TX_TYPE_CANCEL_ORDER, tx_info, parsed))
     }
 
+    fn sign_modify_order_with_context(
+        &self,
+        market_index: i32,
+        order_index: i64,
+        base_amount: i64,
+        price: i64,
+        trigger_price: i64,
+        context: &SigningContext,
+    ) -> Result<SignedPayload<transactions::ModifyOrder>> {
+        let (tx_info, error) = self.signer.sign_modify_order(
+            market_index,
+            order_index,
+            base_amount,
+            price,
+            trigger_price,
+            context.nonce,
+        )?;
+        let tx_info = parse_sign_output(tx_info, error, "sign_modify_order")?;
+        let parsed = transactions::ModifyOrder::from_json_str(&tx_info)?;
+        Ok(SignedPayload::new(TX_TYPE_MODIFY_ORDER, tx_info, parsed))
+    }
+
     fn sign_withdraw_with_context(
         &self,
         usdc_amount: f64,
@@ -1135,6 +1229,26 @@ impl SignerClient {
         let tx_info = parse_sign_output(tx_info, error, "sign_withdraw")?;
         let parsed = transactions::Withdraw::from_json_str(&tx_info)?;
         Ok(SignedPayload::new(TX_TYPE_WITHDRAW, tx_info, parsed))
+    }
+
+    fn sign_create_grouped_orders_with_context(
+        &self,
+        grouping_type: i32,
+        orders: &[CreateOrderTxReq],
+        context: &SigningContext,
+    ) -> Result<SignedPayload<transactions::CreateGroupedOrders>> {
+        let (tx_info, error) = self.signer.sign_create_grouped_orders(
+            grouping_type as u8,
+            orders,
+            context.nonce,
+        )?;
+        let tx_info = parse_sign_output(tx_info, error, "sign_create_grouped_orders")?;
+        let parsed = transactions::CreateGroupedOrders::from_json_str(&tx_info)?;
+        Ok(SignedPayload::new(
+            TX_TYPE_CREATE_GROUP_ORDER,
+            tx_info,
+            parsed,
+        ))
     }
 
     async fn prepare_context(
